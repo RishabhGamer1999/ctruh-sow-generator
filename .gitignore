@@ -1,0 +1,33 @@
+# ─── Sensitive Data — NEVER commit these ─────────────────────────────────────
+knowledge_base/past_sops/*
+knowledge_base/pricing/*
+knowledge_base/policies/*
+!knowledge_base/past_sops/.gitkeep
+!knowledge_base/pricing/.gitkeep
+!knowledge_base/policies/.gitkeep
+
+outputs/*
+!outputs/.gitkeep
+
+# Environment variables (contains config)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
