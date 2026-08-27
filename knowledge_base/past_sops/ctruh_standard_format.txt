@@ -1,0 +1,12 @@
+# CTRUH Standard Scope & Commercials Reference
+
+## Standard SOW Sections & Terms
+1. Project Objective: Synthesize client goals & CTRUH value-add (AI promotional videos, 3D configurators, AR experiences).
+2. Scope of Work: Bulleted deliverable list, asset formats (MP4, JPG/PNG, 3D models), secure cloud sharing handover.
+3. Timeline: 4 standard phases (Requirement & asset collection, First version/preview, Feedback implementation, Final delivery).
+4. Iterations: Default 2 rounds of revisions per deliverable. Major creative changes treated as change requests.
+5. Out of Scope: Standard exclusions include product photography, 3D modelling from scratch unless specified, third-party integrations, extra revisions.
+6. Acceptance Criteria: Quality standard + 5 business days acceptance clause.
+7. Commercials: Plan packages (e.g. Single AI Video, One-Time Creative Package, 6-Month / 12-Month Partnership, 3D Configurator SKUs), Infrastructure & Ongoing Cost table.
+8. Billing Terms: 70% Kickoff advance, 20% 2 weeks post kickoff, 10% after final delivery.
+9. Client Inputs: Brand assets, 3D files/images, guidelines, logo, timely feedback.
