@@ -1,6 +1,6 @@
 """
 SOP Agent — LangChain-powered conversational agent for CTRUH SOWs.
-Cleanly parses outputs and filters reasoning/thinking tags.
+Features robust JSON parsing, fault tolerance, and rich summary responses.
 """
 import json
 import re
@@ -25,7 +25,6 @@ def get_api_key() -> str:
 
 
 def get_active_groq_model(api_key: str) -> str:
-    # Prefer non-reasoning direct instruct models for clean client communication
     preferred_order = [
         "llama-3.3-70b-versatile",
         "llama3-70b-8192",
@@ -58,8 +57,8 @@ def get_llm():
         return ChatGroq(
             model_name=model_name,
             groq_api_key=key,
-            temperature=0.2,
-            max_tokens=2048,
+            temperature=0.1,
+            max_tokens=3000,
         )
     except Exception as e:
         print(f"[Agent] LLM creation error: {e}")
@@ -67,16 +66,52 @@ def get_llm():
 
 
 def clean_ai_response(raw_text: str) -> str:
-    """Removes thinking tags, JSON payload tags, and cleans display text."""
-    # 1. Remove <think>...</think> blocks
+    """Strip thinking tags and JSON markup from visible chat response."""
     cleaned = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
-    # 2. Remove unclosed <think> tags
     if "<think>" in cleaned and "</think>" not in cleaned:
         cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL)
     
-    # 3. Remove <SOP_DATA>...</SOP_DATA> JSON blocks
     cleaned = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r'```json.*?```', '', cleaned, flags=re.DOTALL)
     return cleaned.strip()
+
+
+def safe_extract_json(text: str) -> dict | None:
+    """Robust JSON extraction from LLM response with multiple fallback strategies."""
+    # Strategy 1: <SOP_DATA> tags
+    match = re.search(r'<SOP_DATA>(.*?)</SOP_DATA>', text, re.DOTALL)
+    candidate_str = match.group(1).strip() if match else ""
+
+    # Strategy 2: ```json ... ``` code block
+    if not candidate_str:
+        json_block_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+        if json_block_match:
+            candidate_str = json_block_match.group(1).strip()
+
+    # Strategy 3: Outermost { ... }
+    if not candidate_str:
+        curly_match = re.search(r'(\{[\s\S]*\})', text)
+        if curly_match:
+            candidate_str = curly_match.group(1).strip()
+
+    if not candidate_str:
+        return None
+
+    # Clean common LLM JSON syntax errors
+    # Remove trailing commas: , } -> } and , ] -> ]
+    candidate_str = re.sub(r',\s*\}', '}', candidate_str)
+    candidate_str = re.sub(r',\s*\]', ']', candidate_str)
+
+    try:
+        return json.loads(candidate_str)
+    except Exception:
+        # Fallback: try parsing with relaxed regex if strict parsing fails
+        try:
+            # Replace single quotes with double quotes
+            relaxed = re.sub(r"'", '"', candidate_str)
+            return json.loads(relaxed)
+        except Exception:
+            return None
 
 
 class SOPAgent:
@@ -105,7 +140,7 @@ class SOPAgent:
         llm = self.ensure_llm()
         if llm is None:
             return (
-                "⚠️ **Groq API Key missing!** Please enter your free key in the sidebar on the left to start generating SOWs.",
+                "⚠️ **Groq API Key missing!** Please enter your free key in the sidebar to start.",
                 None
             )
 
@@ -119,14 +154,30 @@ class SOPAgent:
         except Exception as e:
             return f"⚠️ AI Engine error: {str(e)}", None
 
-        sow_data = self._parse_sow_data(ai_text)
+        # Extract structured SOW data
+        sow_data = safe_extract_json(ai_text)
+        
+        # Merge with collected fields
+        if sow_data:
+            for f in REQUIRED_FIELDS:
+                if f not in sow_data and f in self.collected_fields:
+                    sow_data[f] = self.collected_fields[f]
+
         display_text = clean_ai_response(ai_text)
 
-        if not display_text and sow_data:
-            display_text = "I have collected all project details and generated your SOW."
-
+        # Ensure user ALWAYS gets a meaningful message
         if sow_data:
-            display_text += "\n\n✅ **Your CTRUH Scope & Commercials (SOW) is ready! Click the Download button above.**"
+            client_display = sow_data.get('client_name', 'your client')
+            summary_msg = (
+                f"🎉 **I have generated the official Scope of Work for {client_display}!**\n\n"
+                f"• **Project**: {sow_data.get('project_name', 'Digital Deliverables')}\n"
+                f"• **Timeline**: {sow_data.get('timeline_estimate', 'As agreed in scope')}\n"
+                f"• **Commercials**: {sow_data.get('pricing', 'Included in document')}\n\n"
+                f"📥 **Click the blue download button at the top of the page to save the Word document (.docx).**"
+            )
+            display_text = summary_msg
+        elif not display_text:
+            display_text = "I've noted the details. Could you please confirm if there are any specific deliverables or timelines to include?"
 
         return display_text, sow_data
 
@@ -141,7 +192,7 @@ class SOPAgent:
 
         if context:
             messages.append(
-                SystemMessage(content=f"CTRUH Template Reference:\n{context}")
+                SystemMessage(content=f"CTRUH Reference Guidelines:\n{context}")
             )
 
         recent_history = chat_history[-4:] if len(chat_history) > 4 else chat_history
@@ -158,30 +209,16 @@ class SOPAgent:
 
     def _extract_fields_from_message(self, user_message: str, llm):
         try:
-            prompt = FIELD_EXTRACT_PROMPT.format(user_message=user_message[:300])
+            prompt = FIELD_EXTRACT_PROMPT.format(user_message=user_message[:500])
             result = llm.invoke([HumanMessage(content=prompt)])
             cleaned_result = clean_ai_response(result.content)
-            json_match = re.search(r'\{.*\}', cleaned_result, re.DOTALL)
-            if json_match:
-                extracted = json.loads(json_match.group())
+            extracted = safe_extract_json(cleaned_result)
+            if extracted and isinstance(extracted, dict):
                 for key, value in extracted.items():
                     if value and str(value).lower() not in ("null", "none", ""):
                         self.collected_fields[key] = value
         except Exception:
             pass
-
-    def _parse_sow_data(self, response: str) -> dict | None:
-        match = re.search(r'<SOP_DATA>(.*?)</SOP_DATA>', response, re.DOTALL)
-        if not match:
-            return None
-        try:
-            data = json.loads(match.group(1).strip())
-            for field in REQUIRED_FIELDS:
-                if field not in data and field in self.collected_fields:
-                    data[field] = self.collected_fields[field]
-            return data
-        except json.JSONDecodeError:
-            return None
 
     def _format_fields_status(self) -> str:
         lines = []

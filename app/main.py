@@ -26,7 +26,6 @@ def _next_question(field: str) -> str:
 
 def run_app():
     """Main Streamlit execution loop."""
-    # ── Page Configuration ──
     st.set_page_config(
         page_title="CTRUH SOW Generator",
         page_icon="📋",
@@ -34,7 +33,7 @@ def run_app():
         initial_sidebar_state="expanded",
     )
 
-    # ── Session State Initialization ──
+    # ── Session State ──
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "agent" not in st.session_state:
@@ -52,7 +51,6 @@ def run_app():
         st.title("CTRUH SOW Generator")
         st.caption("AI-Powered Scope of Work & Commercials")
 
-        # API Key Configuration
         groq_key = os.getenv("GROQ_API_KEY", "")
         if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
             groq_key = st.secrets["GROQ_API_KEY"]
@@ -171,10 +169,10 @@ def run_app():
     st.markdown("## 📋 CTRUH Scope & Commercials (SOW)")
     st.caption("Generate formal SOW documents following CTRUH's official 9-section format.")
 
-    # Download banner
+    # Top Download Banner
     if st.session_state.sop_ready and st.session_state.sop_bytes:
         client_safe = st.session_state.agent.collected_fields.get('client_name', 'Client').replace(' ', '_')
-        st.success("🎉 **Your CTRUH SOW Document is Ready!**")
+        st.success("🎉 **Your CTRUH SOW Document is Ready for Download!**")
         st.download_button(
             label="📥 Download Scope & Commercials (.docx)",
             data=st.session_state.sop_bytes,
@@ -189,7 +187,7 @@ def run_app():
         with st.chat_message(msg["role"], avatar="🤖" if msg["role"] == "assistant" else "👤"):
             st.markdown(msg["content"])
 
-    # Welcome message if empty
+    # Welcome message
     if not st.session_state.messages:
         welcome = (
             "👋 Hello! I am your **CTRUH SOW Assistant**.\n\n"
@@ -211,30 +209,26 @@ def run_app():
         with st.chat_message("assistant", avatar="🤖"):
             status_box = st.empty()
             t0 = time.time()
-            status_box.info("🧠 Thinking & retrieving CTRUH context...")
+            status_box.info("🧠 Thinking & compiling SOW structure...")
             
             response_text, sow_data = st.session_state.agent.chat(
                 user_input, st.session_state.messages
             )
             
-            elapsed_chat = time.time() - t0
             status_box.empty()
             st.markdown(response_text)
 
         st.session_state.messages.append({"role": "assistant", "content": response_text})
 
+        # Generate Word Document if SOW data is ready
         if sow_data:
-            doc_box = st.empty()
-            doc_t0 = time.time()
-            doc_box.info("📄 Generating CTRUH Word document with letterhead & tables...")
-            try:
-                docx_bytes = generate_sop_docx(sow_data)
-                st.session_state.sop_bytes = docx_bytes
-                st.session_state.sop_ready = True
-                doc_elapsed = time.time() - doc_t0
-                doc_box.success(f"✅ Document generated in {doc_elapsed:.1f}s!")
-            except Exception as e:
-                doc_box.error(f"❌ Document generation error: {str(e)}")
+            with st.spinner("📄 Building CTRUH Word document with letterhead & tables..."):
+                try:
+                    docx_bytes = generate_sop_docx(sow_data)
+                    st.session_state.sop_bytes = docx_bytes
+                    st.session_state.sop_ready = True
+                except Exception as e:
+                    st.error(f"❌ Document generation error: {str(e)}")
 
             st.rerun()
 
