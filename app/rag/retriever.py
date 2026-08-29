@@ -1,7 +1,6 @@
 """
 Knowledge Base Loader & In-Memory Retriever.
 Fast, 100% crash-proof, and designed for cloud environments.
-Loads past CTRUH SOWs and policies directly for Llama 3.3's 128k context window.
 """
 import os
 from pathlib import Path
@@ -18,7 +17,14 @@ def _extract_text_from_file(file_path: Path) -> str:
     try:
         if ext == ".pdf":
             reader = PdfReader(str(file_path))
-            pages = [p.extract_text() or "" for p in reader.pages]
+            pages = []
+            for p in reader.pages:
+                try:
+                    txt = p.extract_text() or ""
+                    if txt.strip():
+                        pages.append(txt.strip())
+                except Exception:
+                    pass
             return "\n".join(pages).strip()
         elif ext in [".docx", ".doc"]:
             return docx2txt.process(str(file_path)).strip()
@@ -26,12 +32,12 @@ def _extract_text_from_file(file_path: Path) -> str:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 return f.read().strip()
     except Exception as e:
-        print(f"[KB] Failed to read {file_path.name}: {e}")
+        print(f"[KB] Non-fatal read error for {file_path.name}: {e}")
     return ""
 
 
 def load_knowledge_base(kb_path: str = KB_PATH) -> list[dict]:
-    """Scan knowledge_base directory and load all reference documents into memory."""
+    """Scan knowledge_base directory and load reference documents into memory."""
     global _KB_CACHE
     docs = []
     base = Path(kb_path)
@@ -43,13 +49,16 @@ def load_knowledge_base(kb_path: str = KB_PATH) -> list[dict]:
         if not file_path.is_file() or file_path.name.startswith("."):
             continue
 
-        text = _extract_text_from_file(file_path)
-        if text:
-            rel = str(file_path.relative_to(base))
-            docs.append({
-                "source": rel,
-                "content": text[:3000]  # Take key portion
-            })
+        try:
+            text = _extract_text_from_file(file_path)
+            if text:
+                rel = str(file_path.relative_to(base))
+                docs.append({
+                    "source": rel,
+                    "content": text[:3000]
+                })
+        except Exception as e:
+            print(f"[KB] Skipped file {file_path.name}: {e}")
 
     _KB_CACHE = docs
     return docs
@@ -57,11 +66,14 @@ def load_knowledge_base(kb_path: str = KB_PATH) -> list[dict]:
 
 def retrieve_context(query: str = "", max_chars: int = 4000) -> str:
     """
-    Returns the most relevant CTRUH knowledge base context.
+    Returns relevant CTRUH knowledge base context.
     """
     global _KB_CACHE
     if not _KB_CACHE:
-        load_knowledge_base()
+        try:
+            load_knowledge_base()
+        except Exception:
+            return ""
 
     if not _KB_CACHE:
         return ""
