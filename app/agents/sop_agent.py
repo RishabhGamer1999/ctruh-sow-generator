@@ -1,5 +1,6 @@
 """
 SOP Agent — LangChain-powered conversational agent for CTRUH SOWs.
+Dynamically detects and connects to the best active Groq model.
 """
 import json
 import re
@@ -8,7 +9,7 @@ import os
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from config import PRIMARY_GROQ_MODEL, FALLBACK_GROQ_MODELS, REQUIRED_FIELDS
+from config import REQUIRED_FIELDS
 from agents.prompts import build_system_prompt, FIELD_EXTRACT_PROMPT
 from rag.retriever import retrieve_context
 
@@ -24,33 +25,60 @@ def get_api_key() -> str:
     return ""
 
 
+def get_active_groq_model(api_key: str) -> str:
+    """Query Groq API to get the exact active model name on the account."""
+    preferred_order = [
+        "llama-3.3-70b-versatile",
+        "llama-3.3-70b-specdec",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    ]
+    
+    try:
+        from groq import Groq
+        client = Groq(api_key=api_key)
+        model_list = client.models.list()
+        available_ids = [m.id for m in model_list.data]
+        
+        # Pick the highest quality model available
+        for pref in preferred_order:
+            if pref in available_ids:
+                return pref
+        
+        # Fallback to any active llama or chat model
+        for m_id in available_ids:
+            if "llama" in m_id or "mixtral" in m_id or "gemma" in m_id:
+                return m_id
+
+        if available_ids:
+            return available_ids[0]
+    except Exception as e:
+        print(f"[Agent] Dynamic model list query error: {e}")
+
+    # Default fallback
+    return "llama3-70b-8192"
+
+
 def get_llm():
-    """Instantiate the Groq LLM with active production model."""
+    """Instantiate the Groq LLM using dynamically detected active model."""
     key = get_api_key()
     if not key:
         return None
 
     try:
         from langchain_groq import ChatGroq
+        model_name = get_active_groq_model(key)
+        return ChatGroq(
+            model_name=model_name,
+            groq_api_key=key,
+            temperature=0.2,
+            max_retries=2,
+        )
     except Exception as e:
-        print(f"[Agent] langchain_groq import failed: {e}")
+        print(f"[Agent] LLM creation error: {e}")
         return None
-
-    models_to_try = [PRIMARY_GROQ_MODEL] + [m for m in FALLBACK_GROQ_MODELS if m != PRIMARY_GROQ_MODEL]
-
-    for model_name in models_to_try:
-        try:
-            llm = ChatGroq(
-                model_name=model_name,
-                groq_api_key=key,
-                temperature=0.2,
-                max_retries=1,
-            )
-            return llm
-        except Exception:
-            continue
-
-    return None
 
 
 class SOPAgent:
@@ -87,27 +115,21 @@ class SOPAgent:
         context = retrieve_context(user_message)
         messages = self._build_messages(user_message, chat_history, context)
 
-        ai_text = ""
         try:
             response = llm.invoke(messages)
             ai_text = response.content
-        except Exception as err_primary:
+        except Exception as e:
+            # Re-detect active model in case of dynamic change
             key = get_api_key()
-            from langchain_groq import ChatGroq
-            success = False
-            for fb_model in FALLBACK_GROQ_MODELS:
-                try:
-                    fallback_llm = ChatGroq(model_name=fb_model, groq_api_key=key, temperature=0.2)
-                    response = fallback_llm.invoke(messages)
-                    ai_text = response.content
-                    self.llm = fallback_llm
-                    success = True
-                    break
-                except Exception:
-                    continue
-
-            if not success:
-                return f"⚠️ AI Engine error: {str(err_primary)}", None
+            try:
+                from langchain_groq import ChatGroq
+                new_model = get_active_groq_model(key)
+                fallback_llm = ChatGroq(model_name=new_model, groq_api_key=key, temperature=0.2)
+                response = fallback_llm.invoke(messages)
+                ai_text = response.content
+                self.llm = fallback_llm
+            except Exception as e2:
+                return f"⚠️ AI Engine error: {str(e2)}", None
 
         sow_data = self._parse_sow_data(ai_text)
         display_text = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', ai_text, flags=re.DOTALL).strip()

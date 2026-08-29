@@ -2,6 +2,7 @@
 streamlit>=1.35.0
 
 # LLM Providers (Groq Cloud API)
+groq>=0.9.0
 langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-groq>=0.1.0
