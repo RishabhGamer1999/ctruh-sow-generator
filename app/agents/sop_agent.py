@@ -8,7 +8,7 @@ import os
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from config import GROQ_MODEL, REQUIRED_FIELDS
+from config import PRIMARY_GROQ_MODEL, FALLBACK_GROQ_MODELS, REQUIRED_FIELDS
 from agents.prompts import build_system_prompt, FIELD_EXTRACT_PROMPT
 from rag.retriever import retrieve_context
 
@@ -25,20 +25,33 @@ def get_api_key() -> str:
 
 
 def get_llm():
-    """Instantiate the Groq LLM cleanly."""
+    """Instantiate the Groq LLM with automatic model fallback."""
     key = get_api_key()
     if not key:
         return None
+
     try:
         from langchain_groq import ChatGroq
-        return ChatGroq(
-            model_name=GROQ_MODEL,
-            groq_api_key=key,
-            temperature=0.2,
-        )
     except Exception as e:
-        print(f"[Agent] LLM creation error: {e}")
+        print(f"[Agent] langchain_groq import failed: {e}")
         return None
+
+    models_to_try = [PRIMARY_GROQ_MODEL] + [m for m in FALLBACK_GROQ_MODELS if m != PRIMARY_GROQ_MODEL]
+
+    for model_name in models_to_try:
+        try:
+            llm = ChatGroq(
+                model_name=model_name,
+                groq_api_key=key,
+                temperature=0.2,
+                max_retries=1,
+            )
+            return llm
+        except Exception as e:
+            print(f"[Agent] Model {model_name} failed, trying next: {e}")
+            continue
+
+    return None
 
 
 class SOPAgent:
@@ -75,11 +88,29 @@ class SOPAgent:
         context = retrieve_context(user_message)
         messages = self._build_messages(user_message, chat_history, context)
 
+        ai_text = ""
+        # Try invoking with current LLM, fallback to alternative models if error
         try:
             response = llm.invoke(messages)
             ai_text = response.content
-        except Exception as e:
-            return f"⚠️ Error communicating with AI engine: {str(e)}", None
+        except Exception as err_primary:
+            # Try fallback models
+            key = get_api_key()
+            from langchain_groq import ChatGroq
+            success = False
+            for fb_model in FALLBACK_GROQ_MODELS:
+                try:
+                    fallback_llm = ChatGroq(model_name=fb_model, groq_api_key=key, temperature=0.2)
+                    response = fallback_llm.invoke(messages)
+                    ai_text = response.content
+                    self.llm = fallback_llm
+                    success = True
+                    break
+                except Exception:
+                    continue
+
+            if not success:
+                return f"⚠️ AI Engine error: {str(err_primary)}", None
 
         sow_data = self._parse_sow_data(ai_text)
         display_text = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', ai_text, flags=re.DOTALL).strip()
