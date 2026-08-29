@@ -24,6 +24,38 @@ def _next_question(field: str) -> str:
     return questions.get(field, f"Could you provide details on **{field.replace('_', ' ')}**?")
 
 
+def format_extracted_summary(filename: str, elapsed: float, extracted: dict, missing: list) -> str:
+    """Format a clean markdown card of extracted project parameters."""
+    lines = [f"📄 **I've analyzed `{filename}` ({elapsed:.1f}s)**. Here are the extracted details:\n"]
+    
+    if extracted.get("client_name"):
+        lines.append(f"🏢 **Client Name**: {extracted['client_name']}")
+    if extracted.get("poc_name"):
+        lines.append(f"👤 **POC**: {extracted['poc_name']}")
+    if extracted.get("project_name"):
+        lines.append(f"🎯 **Project / Use-Case**: {extracted['project_name']}")
+    if extracted.get("project_objective"):
+        lines.append(f"📌 **Objective**: {extracted['project_objective'][:200]}...")
+    if extracted.get("in_scope"):
+        scope_items = extracted['in_scope']
+        if isinstance(scope_items, list):
+            lines.append(f"📦 **Deliverables**: {', '.join(str(x) for x in scope_items[:3])}")
+        else:
+            lines.append(f"📦 **Deliverables**: {str(scope_items)[:120]}")
+    if extracted.get("timeline"):
+        lines.append(f"⏱️ **Timeline**: {extracted['timeline']}")
+    if extracted.get("pricing"):
+        lines.append(f"💰 **Pricing / Commercials**: {extracted['pricing']}")
+
+    lines.append("\n---")
+    if missing:
+        lines.append(f"👉 **To finalize the SOW:** {_next_question(missing[0])}")
+    else:
+        lines.append("👉 **All details captured!** Please confirm or share any custom pricing to generate the document.")
+
+    return "\n\n".join(lines)
+
+
 def run_app():
     """Main Streamlit execution loop."""
     st.set_page_config(
@@ -108,32 +140,8 @@ def run_app():
                     st.session_state.agent.set_extracted_info(extracted)
                 st.session_state.processed_files.add(uploaded.name)
 
-                found = [k for k, v in extracted.items() if v]
                 missing = st.session_state.agent.get_missing_fields()
-
-                if extracted:
-                    lines = [f"📄 **I've analyzed `{uploaded.name}` ({elapsed:.1f}s)**. Here is what I found:\n"]
-                    if extracted.get("client_name"):
-                        lines.append(f"- **Client Name**: {extracted['client_name']}")
-                    if extracted.get("project_name"):
-                        lines.append(f"- **Project**: {extracted['project_name']}")
-                    if extracted.get("timeline"):
-                        lines.append(f"- **Timeline**: {extracted['timeline']}")
-                    if extracted.get("pricing"):
-                        lines.append(f"- **Pricing / Commercials**: {extracted['pricing']}")
-
-                    lines.append(f"\n✅ Extracted **{len(found)}** project parameters.")
-                    if missing:
-                        lines.append(f"\n👉 **Next step:** {_next_question(missing[0])}")
-                    else:
-                        lines.append("\n👉 **All fields ready!** Just confirm or share any custom pricing to generate.")
-
-                    bot_msg = "\n".join(lines)
-                else:
-                    bot_msg = (
-                        f"📄 I've read `{uploaded.name}` ({elapsed:.1f}s). Let's go through it together!\n\n"
-                        "What is the **client name** and **project name**?"
-                    )
+                bot_msg = format_extracted_summary(uploaded.name, elapsed, extracted, missing)
 
                 st.session_state.messages.append({"role": "assistant", "content": bot_msg})
 
