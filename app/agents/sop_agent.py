@@ -1,6 +1,6 @@
 """
 SOP Agent — LangChain-powered conversational agent for CTRUH SOWs.
-Dynamically detects and connects to the best active Groq model.
+Dynamically connects to Groq with token-safe compact messages.
 """
 import json
 import re
@@ -15,7 +15,6 @@ from rag.retriever import retrieve_context
 
 
 def get_api_key() -> str:
-    """Retrieve Groq API key from environment, session state, or Streamlit secrets."""
     if os.getenv("GROQ_API_KEY"):
         return os.getenv("GROQ_API_KEY")
     if hasattr(st, "session_state") and "user_groq_key" in st.session_state and st.session_state.user_groq_key:
@@ -26,7 +25,6 @@ def get_api_key() -> str:
 
 
 def get_active_groq_model(api_key: str) -> str:
-    """Query Groq API to get the exact active model name on the account."""
     preferred_order = [
         "llama-3.3-70b-versatile",
         "llama-3.3-70b-specdec",
@@ -35,38 +33,25 @@ def get_active_groq_model(api_key: str) -> str:
         "mixtral-8x7b-32768",
         "gemma2-9b-it"
     ]
-    
     try:
         from groq import Groq
         client = Groq(api_key=api_key)
         model_list = client.models.list()
         available_ids = [m.id for m in model_list.data]
-        
-        # Pick the highest quality model available
         for pref in preferred_order:
             if pref in available_ids:
                 return pref
-        
-        # Fallback to any active llama or chat model
-        for m_id in available_ids:
-            if "llama" in m_id or "mixtral" in m_id or "gemma" in m_id:
-                return m_id
-
         if available_ids:
             return available_ids[0]
     except Exception as e:
-        print(f"[Agent] Dynamic model list query error: {e}")
-
-    # Default fallback
+        print(f"[Agent] Model query error: {e}")
     return "llama3-70b-8192"
 
 
 def get_llm():
-    """Instantiate the Groq LLM using dynamically detected active model."""
     key = get_api_key()
     if not key:
         return None
-
     try:
         from langchain_groq import ChatGroq
         model_name = get_active_groq_model(key)
@@ -74,7 +59,7 @@ def get_llm():
             model_name=model_name,
             groq_api_key=key,
             temperature=0.2,
-            max_retries=2,
+            max_tokens=2048,
         )
     except Exception as e:
         print(f"[Agent] LLM creation error: {e}")
@@ -119,17 +104,7 @@ class SOPAgent:
             response = llm.invoke(messages)
             ai_text = response.content
         except Exception as e:
-            # Re-detect active model in case of dynamic change
-            key = get_api_key()
-            try:
-                from langchain_groq import ChatGroq
-                new_model = get_active_groq_model(key)
-                fallback_llm = ChatGroq(model_name=new_model, groq_api_key=key, temperature=0.2)
-                response = fallback_llm.invoke(messages)
-                ai_text = response.content
-                self.llm = fallback_llm
-            except Exception as e2:
-                return f"⚠️ AI Engine error: {str(e2)}", None
+            return f"⚠️ AI Engine error: {str(e)}", None
 
         sow_data = self._parse_sow_data(ai_text)
         display_text = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', ai_text, flags=re.DOTALL).strip()
@@ -150,24 +125,27 @@ class SOPAgent:
 
         if context:
             messages.append(
-                SystemMessage(content=f"Reference from CTRUH knowledge base:\n\n{context}")
+                SystemMessage(content=f"CTRUH Template Reference:\n{context}")
             )
 
-        for msg in chat_history[1:]:
+        # Keep only the last 4 conversation turns to stay well below token limits
+        recent_history = chat_history[-4:] if len(chat_history) > 4 else chat_history
+        for msg in recent_history:
             if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"]))
+                messages.append(HumanMessage(content=msg["content"][:500]))
             elif msg["role"] == "assistant":
-                content = msg["content"].replace(
+                clean_content = msg["content"].replace(
                     "\n\n✅ **Your CTRUH Scope & Commercials (SOW) is ready! Click the Download button above.**", ""
                 )
-                messages.append(AIMessage(content=content))
+                # Keep assistant history compact
+                messages.append(AIMessage(content=clean_content[:500]))
 
         messages.append(HumanMessage(content=user_message))
         return messages
 
     def _extract_fields_from_message(self, user_message: str, llm):
         try:
-            prompt = FIELD_EXTRACT_PROMPT.format(user_message=user_message)
+            prompt = FIELD_EXTRACT_PROMPT.format(user_message=user_message[:300])
             result = llm.invoke([HumanMessage(content=prompt)])
             json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
             if json_match:
@@ -196,8 +174,8 @@ class SOPAgent:
         for field in REQUIRED_FIELDS:
             value = self.collected_fields.get(field)
             if value:
-                preview = str(value)[:60] + ("..." if len(str(value)) > 60 else "")
+                preview = str(value)[:50] + ("..." if len(str(value)) > 50 else "")
                 lines.append(f"✅ {field}: {preview}")
             else:
-                lines.append(f"❌ {field}: NOT YET COLLECTED")
+                lines.append(f"❌ {field}: Missing")
         return "\n".join(lines)
