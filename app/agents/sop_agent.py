@@ -25,7 +25,7 @@ def get_api_key() -> str:
 
 
 def get_llm():
-    """Instantiate the Groq LLM with automatic model fallback."""
+    """Instantiate the Groq LLM with active production model."""
     key = get_api_key()
     if not key:
         return None
@@ -47,8 +47,7 @@ def get_llm():
                 max_retries=1,
             )
             return llm
-        except Exception as e:
-            print(f"[Agent] Model {model_name} failed, trying next: {e}")
+        except Exception:
             continue
 
     return None
@@ -89,12 +88,10 @@ class SOPAgent:
         messages = self._build_messages(user_message, chat_history, context)
 
         ai_text = ""
-        # Try invoking with current LLM, fallback to alternative models if error
         try:
             response = llm.invoke(messages)
             ai_text = response.content
         except Exception as err_primary:
-            # Try fallback models
             key = get_api_key()
             from langchain_groq import ChatGroq
             success = False

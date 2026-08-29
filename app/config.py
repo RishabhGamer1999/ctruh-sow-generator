@@ -15,12 +15,12 @@ def get_secret(key: str, default: str = "") -> str:
 GROQ_API_KEY      = get_secret("GROQ_API_KEY", "")
 LLM_PROVIDER      = get_secret("LLM_PROVIDER", "groq" if GROQ_API_KEY else "ollama")
 
-# Most widely supported Groq models with auto-fallback
-PRIMARY_GROQ_MODEL = get_secret("GROQ_MODEL", "llama-3.1-70b-versatile")
+# Active Groq production models
+PRIMARY_GROQ_MODEL = get_secret("GROQ_MODEL", "llama-3.1-8b-instant")
 FALLBACK_GROQ_MODELS = [
-    "llama-3.1-70b-versatile",
     "llama-3.1-8b-instant",
-    "llama3-70b-8192",
+    "llama-3.3-70b-versatile",
+    "llama-3.3-70b-specdec",
     "mixtral-8x7b-32768",
     "gemma2-9b-it"
 ]
