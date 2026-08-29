@@ -12,46 +12,48 @@ from document.generator import generate_sop_docx
 from rag.ingestor import ingest_documents
 
 
-def _next_question(field: str) -> str:
-    questions = {
-        "project_name":        "What should we name this project?",
-        "client_name":         "What is the client's company or brand name?",
-        "project_objective":   "What is the core objective of this project for the client?",
-        "in_scope":            "What specific deliverables are in-scope (e.g. 3D models, AI videos, configurator)?",
-        "timeline":            "What is the delivery timeline or deadline for this project?",
-        "pricing":             "What is the agreed pricing / commercial package for this project?",
-    }
-    return questions.get(field, f"Could you provide details on **{field.replace('_', ' ')}**?")
+def _format_value_to_text(val) -> str:
+    """Helper to convert dicts/lists into clean human-readable text."""
+    if isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            k_clean = str(k).replace('_', ' ').title()
+            if isinstance(v, list):
+                parts.append(f"{k_clean}: {', '.join(str(x) for x in v)}")
+            elif isinstance(v, dict):
+                parts.append(f"{k_clean}: {_format_value_to_text(v)}")
+            else:
+                parts.append(f"{k_clean}: {v}")
+        return " | ".join(parts)
+    elif isinstance(val, list):
+        return ", ".join(str(x) for x in val)
+    return str(val)
 
 
 def format_extracted_summary(filename: str, elapsed: float, extracted: dict, missing: list) -> str:
-    """Format a clean markdown card of extracted project parameters."""
+    """Format a clean, executive-ready summary card of extracted proposal data."""
     lines = [f"📄 **I've analyzed `{filename}` ({elapsed:.1f}s)**. Here are the extracted details:\n"]
     
     if extracted.get("client_name"):
-        lines.append(f"🏢 **Client Name**: {extracted['client_name']}")
+        lines.append(f"🏢 **Client / Account**: {extracted['client_name']}")
     if extracted.get("poc_name"):
         lines.append(f"👤 **POC**: {extracted['poc_name']}")
+    if extracted.get("date"):
+        lines.append(f"📅 **Proposal / Meeting Date**: {extracted['date']}")
     if extracted.get("project_name"):
         lines.append(f"🎯 **Project / Use-Case**: {extracted['project_name']}")
     if extracted.get("project_objective"):
-        lines.append(f"📌 **Objective**: {extracted['project_objective'][:200]}...")
+        lines.append(f"📌 **Objective**: {str(extracted['project_objective'])[:220]}...")
     if extracted.get("in_scope"):
-        scope_items = extracted['in_scope']
-        if isinstance(scope_items, list):
-            lines.append(f"📦 **Deliverables**: {', '.join(str(x) for x in scope_items[:3])}")
-        else:
-            lines.append(f"📦 **Deliverables**: {str(scope_items)[:120]}")
-    if extracted.get("timeline"):
-        lines.append(f"⏱️ **Timeline**: {extracted['timeline']}")
-    if extracted.get("pricing"):
-        lines.append(f"💰 **Pricing / Commercials**: {extracted['pricing']}")
+        scope_text = _format_value_to_text(extracted['in_scope'])
+        lines.append(f"📦 **Deliverables**: {scope_text[:200]}")
 
     lines.append("\n---")
-    if missing:
-        lines.append(f"👉 **To finalize the SOW:** {_next_question(missing[0])}")
-    else:
-        lines.append("👉 **All details captured!** Please confirm or share any custom pricing to generate the document.")
+    lines.append(
+        "👉 **To finalize the SOW, please share:**\n"
+        "1. 💰 **Pricing & Commercials**: Amount for each option/package (e.g. Single video, One-time package, 6/12 Month).\n"
+        "2. ⏱️ **Delivery Timeline**: Expected turnaround (e.g. `8-10 working days for 1 SKU` or reply `use standard`)."
+    )
 
     return "\n\n".join(lines)
 

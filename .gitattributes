@@ -1,0 +1,5 @@
+# Auto-normalize line endings to LF across Windows and Linux
+* text=auto eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf

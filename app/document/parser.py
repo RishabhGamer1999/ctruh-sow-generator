@@ -1,6 +1,6 @@
 """
 Client Requirement / Account Proposal Document Parser.
-Extracts structured SOW fields from uploaded PDF/DOCX files with smart fallback.
+Extracts client info, meeting dates, use-cases, and package scopes.
 """
 import json
 import re
@@ -13,7 +13,7 @@ from agents.prompts import EXTRACTION_PROMPT
 
 
 def extract_raw_text(file_path: str) -> str:
-    """Extract raw text from PDF, DOCX, or text files safely."""
+    """Extract raw text safely from PDF, DOCX, or text files."""
     path = Path(file_path)
     full_text = ""
 
@@ -42,25 +42,30 @@ def extract_raw_text(file_path: str) -> str:
 
 
 def parse_with_regex_fallback(text: str) -> dict:
-    """Fallback parser for CTRUH Account Proposal table formats."""
+    """Regex extractor for CTRUH Account Proposal structure."""
     result = {}
     
-    # Extract Company / Client Name
+    # 1. Company Name
     m_comp = re.search(r'(?:Company\s*Name|The Account)[\s\:\-\|]+([^\n\r\|]+)', text, re.IGNORECASE)
     if m_comp and m_comp.group(1).strip() and len(m_comp.group(1).strip()) < 80:
         result["client_name"] = m_comp.group(1).strip()
 
-    # Extract POC
+    # 2. POC
     m_poc = re.search(r'(?:POC\s*Name|Who we[\'’]re talking to)[\s\:\-\|]+([^\n\r\|]+)', text, re.IGNORECASE)
     if m_poc and m_poc.group(1).strip() and len(m_poc.group(1).strip()) < 80:
         result["poc_name"] = m_poc.group(1).strip()
 
-    # Extract Use Case / Project Name
+    # 3. Meeting Date
+    m_date = re.search(r'(?:Date|Meeting Summary)[\s\:\-\|]+(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}\s+[A-Za-z]+\s+\d{4})', text, re.IGNORECASE)
+    if m_date:
+        result["date"] = m_date.group(1).strip()
+
+    # 4. Use Case
     m_uc = re.search(r'(?:Use[\-\s]*case|What they need)[\s\:\-\|]+([^\n\r\|]+)', text, re.IGNORECASE)
     if m_uc and m_uc.group(1).strip() and len(m_uc.group(1).strip()) < 120:
         result["project_name"] = m_uc.group(1).strip()
 
-    # Extract Deliverables
+    # 5. Deliverables / Scope
     m_what = re.search(r'(?:What & how many|What we[\'’]re proposing)[\s\:\-\|]+([^\n\r]+)', text, re.IGNORECASE)
     if m_what and m_what.group(1).strip():
         result["in_scope"] = [m_what.group(1).strip()]
@@ -76,7 +81,6 @@ def parse_requirement_doc(file_path: str, llm) -> dict:
     if not full_text:
         return {}
 
-    # Extract regex fallback fields first
     fallback_data = parse_with_regex_fallback(full_text)
 
     if llm is None:
@@ -94,7 +98,7 @@ def parse_requirement_doc(file_path: str, llm) -> dict:
         if "<think>" in raw and "</think>" not in raw:
             raw = re.sub(r'<think>.*', '', raw, flags=re.DOTALL)
 
-        # Extract JSON candidate
+        # Extract JSON block
         candidate = ""
         m_json = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', raw)
         if m_json:
@@ -114,7 +118,6 @@ def parse_requirement_doc(file_path: str, llm) -> dict:
                 if v is not None and str(v).strip().lower() not in ("null", "none", "")
             }
             
-            # Combine with fallback
             for k, v in fallback_data.items():
                 if k not in cleaned or not cleaned[k]:
                     cleaned[k] = v
