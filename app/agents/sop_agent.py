@@ -1,43 +1,44 @@
 """
-SOP Agent — LangChain-powered conversational agent that:
-  1. Guides the user through collecting CTRUH SOW information
-  2. Retrieves relevant context from the RAG knowledge base
-  3. Generates the structured SOW data when all details are ready
+SOP Agent — LangChain-powered conversational agent for CTRUH SOWs.
 """
 import json
 import re
 import os
 
+import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from config import (
-    GROQ_API_KEY, GROQ_MODEL, LLM_PROVIDER,
-    OLLAMA_BASE_URL, OLLAMA_MODEL, REQUIRED_FIELDS
-)
+from config import GROQ_MODEL, REQUIRED_FIELDS
 from agents.prompts import build_system_prompt, FIELD_EXTRACT_PROMPT
 from rag.retriever import retrieve_context
 
 
-def get_llm():
-    """Returns Groq or Ollama LLM depending on configuration."""
-    if GROQ_API_KEY:
-        try:
-            from langchain_groq import ChatGroq
-            return ChatGroq(
-                model_name=GROQ_MODEL,
-                groq_api_key=GROQ_API_KEY,
-                temperature=0.2,
-            )
-        except Exception as e:
-            print(f"[Agent] Groq init failed, falling back: {e}")
+def get_api_key() -> str:
+    """Retrieve Groq API key from environment, session state, or Streamlit secrets."""
+    if os.getenv("GROQ_API_KEY"):
+        return os.getenv("GROQ_API_KEY")
+    if hasattr(st, "session_state") and "user_groq_key" in st.session_state and st.session_state.user_groq_key:
+        return st.session_state.user_groq_key
+    if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
+        return st.secrets["GROQ_API_KEY"]
+    return ""
 
-    # Fallback to local Ollama
-    from langchain_ollama import ChatOllama
-    return ChatOllama(
-        model=OLLAMA_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        temperature=0.1,
-    )
+
+def get_llm():
+    """Instantiate the Groq LLM cleanly."""
+    key = get_api_key()
+    if not key:
+        return None
+    try:
+        from langchain_groq import ChatGroq
+        return ChatGroq(
+            model_name=GROQ_MODEL,
+            groq_api_key=key,
+            temperature=0.2,
+        )
+    except Exception as e:
+        print(f"[Agent] LLM creation error: {e}")
+        return None
 
 
 class SOPAgent:
@@ -45,8 +46,12 @@ class SOPAgent:
         self.llm = get_llm()
         self.collected_fields: dict = {}
 
+    def ensure_llm(self):
+        if self.llm is None:
+            self.llm = get_llm()
+        return self.llm
+
     def set_extracted_info(self, info: dict):
-        """Pre-populate fields extracted from an uploaded Account Proposal."""
         self.collected_fields.update({k: v for k, v in info.items() if v})
 
     def get_missing_fields(self) -> list[str]:
@@ -59,19 +64,24 @@ class SOPAgent:
         return len(self.get_missing_fields()) == 0
 
     def chat(self, user_message: str, chat_history: list) -> tuple[str, dict | None]:
-        """
-        Process user message and return (response_text, sow_data_dict or None)
-        """
-        self._extract_fields_from_message(user_message)
+        llm = self.ensure_llm()
+        if llm is None:
+            return (
+                "⚠️ **Groq API Key missing!** Please enter your free key in the sidebar on the left to start generating SOWs.",
+                None
+            )
+
+        self._extract_fields_from_message(user_message, llm)
         context = retrieve_context(user_message)
         messages = self._build_messages(user_message, chat_history, context)
 
-        response = self.llm.invoke(messages)
-        ai_text = response.content
+        try:
+            response = llm.invoke(messages)
+            ai_text = response.content
+        except Exception as e:
+            return f"⚠️ Error communicating with AI engine: {str(e)}", None
 
         sow_data = self._parse_sow_data(ai_text)
-
-        # Clean display text (remove raw JSON markup)
         display_text = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', ai_text, flags=re.DOTALL).strip()
 
         if sow_data:
@@ -105,10 +115,10 @@ class SOPAgent:
         messages.append(HumanMessage(content=user_message))
         return messages
 
-    def _extract_fields_from_message(self, user_message: str):
+    def _extract_fields_from_message(self, user_message: str, llm):
         try:
             prompt = FIELD_EXTRACT_PROMPT.format(user_message=user_message)
-            result = self.llm.invoke([HumanMessage(content=prompt)])
+            result = llm.invoke([HumanMessage(content=prompt)])
             json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
             if json_match:
                 extracted = json.loads(json_match.group())
