@@ -1,6 +1,6 @@
 """
 SOP Agent — LangChain-powered conversational agent for CTRUH SOWs.
-Dynamically connects to Groq with token-safe compact messages.
+Cleanly parses outputs and filters reasoning/thinking tags.
 """
 import json
 import re
@@ -25,9 +25,9 @@ def get_api_key() -> str:
 
 
 def get_active_groq_model(api_key: str) -> str:
+    # Prefer non-reasoning direct instruct models for clean client communication
     preferred_order = [
         "llama-3.3-70b-versatile",
-        "llama-3.3-70b-specdec",
         "llama3-70b-8192",
         "llama3-8b-8192",
         "mixtral-8x7b-32768",
@@ -64,6 +64,19 @@ def get_llm():
     except Exception as e:
         print(f"[Agent] LLM creation error: {e}")
         return None
+
+
+def clean_ai_response(raw_text: str) -> str:
+    """Removes thinking tags, JSON payload tags, and cleans display text."""
+    # 1. Remove <think>...</think> blocks
+    cleaned = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
+    # 2. Remove unclosed <think> tags
+    if "<think>" in cleaned and "</think>" not in cleaned:
+        cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL)
+    
+    # 3. Remove <SOP_DATA>...</SOP_DATA> JSON blocks
+    cleaned = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', cleaned, flags=re.DOTALL)
+    return cleaned.strip()
 
 
 class SOPAgent:
@@ -107,7 +120,10 @@ class SOPAgent:
             return f"⚠️ AI Engine error: {str(e)}", None
 
         sow_data = self._parse_sow_data(ai_text)
-        display_text = re.sub(r'<SOP_DATA>.*?</SOP_DATA>', '', ai_text, flags=re.DOTALL).strip()
+        display_text = clean_ai_response(ai_text)
+
+        if not display_text and sow_data:
+            display_text = "I have collected all project details and generated your SOW."
 
         if sow_data:
             display_text += "\n\n✅ **Your CTRUH Scope & Commercials (SOW) is ready! Click the Download button above.**"
@@ -128,17 +144,14 @@ class SOPAgent:
                 SystemMessage(content=f"CTRUH Template Reference:\n{context}")
             )
 
-        # Keep only the last 4 conversation turns to stay well below token limits
         recent_history = chat_history[-4:] if len(chat_history) > 4 else chat_history
         for msg in recent_history:
             if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"][:500]))
+                messages.append(HumanMessage(content=msg["content"][:400]))
             elif msg["role"] == "assistant":
-                clean_content = msg["content"].replace(
-                    "\n\n✅ **Your CTRUH Scope & Commercials (SOW) is ready! Click the Download button above.**", ""
-                )
-                # Keep assistant history compact
-                messages.append(AIMessage(content=clean_content[:500]))
+                clean_content = clean_ai_response(msg["content"])
+                if clean_content:
+                    messages.append(AIMessage(content=clean_content[:400]))
 
         messages.append(HumanMessage(content=user_message))
         return messages
@@ -147,7 +160,8 @@ class SOPAgent:
         try:
             prompt = FIELD_EXTRACT_PROMPT.format(user_message=user_message[:300])
             result = llm.invoke([HumanMessage(content=prompt)])
-            json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
+            cleaned_result = clean_ai_response(result.content)
+            json_match = re.search(r'\{.*\}', cleaned_result, re.DOTALL)
             if json_match:
                 extracted = json.loads(json_match.group())
                 for key, value in extracted.items():
